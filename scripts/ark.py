@@ -64,7 +64,7 @@ def call(method,url,key,payload=None,timeout=180):
     except urllib.error.HTTPError as e:
         try:detail=json.load(e).get('error',{})
         except Exception:detail={}
-        msg=detail.get('code') or detail.get('message') or ''
+        msg=' '.join(str(detail.get(k)) for k in ('code','param','message') if detail.get(k))
         raise ValueError(f'方舟接口返回 HTTP {e.code} {msg}'.strip()+'；先查原因，勿自动重复付费请求') from None
     except ValueError:raise
     except Exception:
@@ -87,9 +87,9 @@ def sidecar(project,dest,record):
 
 def seedream(project,prompt,images,size,dest,seed=None):
     key,base=config()
+    # 只发各版本通用的参数：部分轻量模型（如 5.0-flash 只出单图）不接受组图参数。
     payload={'model':os.environ.get('ARK_IMAGE_MODEL',DEFAULT_IMAGE_MODEL),'prompt':prompt,'size':size,
-             'sequential_image_generation':'disabled','response_format':'url',
-             'watermark':os.environ.get('ARK_WATERMARK','false').lower()=='true'}
+             'response_format':'url','watermark':os.environ.get('ARK_WATERMARK','false').lower()=='true'}
     if images:payload['image']=[data_uri(x) for x in images] if len(images)>1 else data_uri(images[0])
     if seed is not None:payload['seed']=seed
     data=call('POST',base+'/images/generations',key,payload)
@@ -264,7 +264,7 @@ def contact_sheet(images,dest,cols=4,cell=360):
 def trial(outdir,people,style,scenes,videos,ratio,authorized):
     if not authorized:raise ValueError('试跑会产生生图/视频费用，需加 --authorized')
     out=Path(outdir).resolve()
-    if out.exists():raise ValueError('输出文件夹已存在，换一个新名字：'+out.name)
+    if out.exists() and any(p.is_file() for p in out.rglob('*')):raise ValueError('输出文件夹里已有结果，换一个新名字：'+out.name)
     style_text=Path(style).read_text(encoding='utf-8').strip()
     lines=[x.strip().lstrip('-0123456789.、 ').strip() for x in Path(scenes).read_text(encoding='utf-8').splitlines()]
     lines=[x for x in lines if x and not x.startswith('#')][:12]
@@ -278,7 +278,7 @@ def trial(outdir,people,style,scenes,videos,ratio,authorized):
         if not name.strip() or not photos:raise ValueError('--person 格式：名字=照片1,照片2')
         for ph in photos:check_image(ph)
         parsed.append((name.strip(),photos))
-    out.mkdir(parents=True);(out/'characters').mkdir();(out/'shots').mkdir()
+    for d in (out/'characters',out/'shots'):d.mkdir(parents=True,exist_ok=True)
     sheets=[]
     for i,(name,photos) in enumerate(parsed,1):
         dest=out/'characters'/f'P{i}.png'
@@ -298,7 +298,7 @@ def trial(outdir,people,style,scenes,videos,ratio,authorized):
         shots.append(dest);print(f'分镜 {i}/{len(lines)}：',dest,flush=True)
     contact_sheet([s for _,s in sheets]+shots,out/'总览.jpg')
     if videos:
-        key,base=config();model=os.environ.get('ARK_VIDEO_MODEL',DEFAULT_VIDEO_MODEL);(out/'videos').mkdir()
+        key,base=config();model=os.environ.get('ARK_VIDEO_MODEL',DEFAULT_VIDEO_MODEL);(out/'videos').mkdir(exist_ok=True)
         for i,pic in enumerate(shots[:videos],1):
             payload={'model':model,'content':[{'type':'text','text':lines[i-1]+'。动作自然连贯，一个主要动作，镜头缓慢推近 --duration 5 --ratio adaptive --resolution 720p --watermark false'},
                      {'type':'image_url','image_url':{'url':data_uri(pic)},'role':'first_frame'}]}
