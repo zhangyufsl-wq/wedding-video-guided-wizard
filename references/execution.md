@@ -112,7 +112,7 @@ python3 scripts/ark.py purge PROJECT --dir photos --confirm   # 新人验收后�
 ```
 
 - 每个输出旁有 `.gen.json`：模型、提示词、参考图指纹、任务号。登记文件时一并登记。
-- 参考图以 base64 内联提交，单张不超过 10MB；首帧以 `role: first_frame` 提交。若账号接口要求公网 URL，先改为上传到对象存储再传地址。
+- 参考图以 base64 内联提交，大图自动缩到长边 2048 再传；首帧以 `role: first_frame` 提交。若账号接口要求公网 URL，先改为上传到对象存储再传地址。
 - `VIDEO_PACK.json` 每镜可写 `"duration": 6` 覆盖默认时长（2–12 秒）。
 - `i2v-batch` 跳过已存在的同版本输出，失败即停，绝不连续付费重试。
 - `purge` 只在第 14 步新人验收后可用，删除后在状态里标记 `purged_at` 并把指纹写进历史，`validate` 仍可通过。
@@ -124,4 +124,4 @@ python3 scripts/ark.py purge PROJECT --dir photos --confirm   # 新人验收后�
 python3 scripts/ark.py trial D:/试跑/run1 --person "阿杰=D:/照片/jie1.jpg,D:/照片/jie2.jpg" --person "小雨=D:/照片/yu1.jpg" --style assets/style-qban.md --scenes assets/trial-scenes.md --authorized
 ```
 
-先出每人一张设定图，再按 `assets/trial-scenes.md` 出最多 12 张分镜，最后拼一张 `总览.jpg` 方便一眼看一致性。加 `--videos 1` 再把第一张做成 5 秒视频（最多 3 条）。输出文件夹必须是新的；试跑照片用完自行删除。
+先出每人一张设定图，再按 `assets/trial-scenes.md` 出最多 12 张分镜，最后拼一张 `总览.jpg` 方便一眼看一致性。加 `--videos 1` 再把第一张做成 5 秒视频（最多 3 条）。同一文件夹重跑会沿用已生成的图（不重复扣费），想重新生成换个新文件夹名。超过 4MB 或很大的手机原图会在内存里自动缩小后再上传，原文件不变。试跑照片用完自行删除。

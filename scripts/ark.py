@@ -42,11 +42,21 @@ def text_file(project,path,what):
     if not t or PLACEHOLDER.search(t):raise ValueError(what+'为空或仍有占位符')
     return t
 
-def data_uri(path):
+def data_uri(path,max_side=2048):
     p=Path(path);mime=MIME.get(p.suffix.lower())
     if not mime:raise ValueError('不支持的图片类型：'+p.name)
-    if p.stat().st_size>10*1024*1024:raise ValueError('参考图超过 10MB，先压缩：'+p.name)
-    return f'data:{mime};base64,'+base64.b64encode(p.read_bytes()).decode()
+    data=p.read_bytes()
+    try:
+        from PIL import Image, ImageOps
+        import io
+        with Image.open(p) as im:
+            # 手机原图常超过 10MB 或带旋转信息：统一转正、缩到长边 2048、存成 JPEG，只在内存里处理，不改原文件。
+            if len(data)>4*1024*1024 or max(im.size)>max_side or (im.getexif() or {}).get(274,1)!=1:
+                im=ImageOps.exif_transpose(im).convert('RGB');im.thumbnail((max_side,max_side))
+                buf=io.BytesIO();im.save(buf,'JPEG',quality=90);data=buf.getvalue();mime='image/jpeg'
+    except ImportError:pass
+    if len(data)>10*1024*1024:raise ValueError('参考图超过 10MB，先压缩：'+p.name)
+    return f'data:{mime};base64,'+base64.b64encode(data).decode()
 
 def check_image(path):
     try:from PIL import Image
@@ -264,7 +274,7 @@ def contact_sheet(images,dest,cols=4,cell=360):
 def trial(outdir,people,style,scenes,videos,ratio,authorized):
     if not authorized:raise ValueError('试跑会产生生图/视频费用，需加 --authorized')
     out=Path(outdir).resolve()
-    if out.exists() and any(p.is_file() for p in out.rglob('*')):raise ValueError('输出文件夹里已有结果，换一个新名字：'+out.name)
+    # 同一文件夹重跑时续做：已生成的图直接沿用，不重复付费；想重新生成就换新文件夹名。
     style_text=Path(style).read_text(encoding='utf-8').strip()
     lines=[x.strip().lstrip('-0123456789.、 ').strip() for x in Path(scenes).read_text(encoding='utf-8').splitlines()]
     lines=[x for x in lines if x and not x.startswith('#')][:12]
@@ -282,6 +292,8 @@ def trial(outdir,people,style,scenes,videos,ratio,authorized):
     sheets=[]
     for i,(name,photos) in enumerate(parsed,1):
         dest=out/'characters'/f'P{i}.png'
+        if dest.exists():
+            check_image(dest);sheets.append((name,dest));print('沿用已生成的角色设定图：',dest,flush=True);continue
         prompt=(f'{style_text}\n\n任务：根据参考照片，为「{name}」生成一张Q版角色设定图。同一画面包含正面、四分之三侧面、全身三个视角，'
                 '浅色纯色背景，不加任何文字。保留照片里的发型发色、脸型特征、眼镜等标志物和常穿服饰；不要美化到认不出，'
                 f'不改变年龄阶段和性别表现。所有参考图都是同一个人：{name}。')
@@ -292,6 +304,8 @@ def trial(outdir,people,style,scenes,videos,ratio,authorized):
     shots=[]
     for i,scene in enumerate(lines,1):
         dest=out/'shots'/f'S{i:02}.png'
+        if dest.exists():
+            shots.append(dest);print(f'沿用已生成的分镜 {i}：',dest,flush=True);continue
         prompt=f'{style_text}\n\n{mapping}\n\n{scene}\n\n画幅 {ratio}，单一画面，不加文字。'
         model=seedream(out,prompt,[s for _,s in sheets],SIZES[ratio],dest)
         sidecar(out,dest,{'kind':'trial-keyframe','scene':scene,'model':model,'prompt':prompt})
@@ -302,6 +316,7 @@ def trial(outdir,people,style,scenes,videos,ratio,authorized):
         for i,pic in enumerate(shots[:videos],1):
             payload={'model':model,'content':[{'type':'text','text':lines[i-1]+'。动作自然连贯，一个主要动作，镜头缓慢推近 --duration 5 --ratio adaptive --resolution 720p --watermark false'},
                      {'type':'image_url','image_url':{'url':data_uri(pic)},'role':'first_frame'}]}
+            if (out/'videos'/f'S{i:02}.mp4').exists():continue
             task=call('POST',base+'/contents/generations/tasks',key,payload).get('id')
             if not task:raise ValueError('未返回任务号')
             poll(out,task,out/'videos'/f'S{i:02}.mp4',key,base,10,900,{'kind':'trial-video','model':model,'first_frame':rel(out,pic)})
