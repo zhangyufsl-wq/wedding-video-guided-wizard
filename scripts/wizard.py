@@ -12,10 +12,10 @@ import tempfile
 import zipfile
 
 STEPS = ['故事采集','文案写作包与初稿','新人确认文案','配音音色试听','完整旁白',
-         '分镜设计','三个重点分镜试图','剩余分镜生图','图生视频','BGM 风格试听',
+         '分镜设计','角色定妆与重点分镜试图','剩余分镜生图','图生视频','BGM 风格试听',
          '配音与 BGM 片段','完整混音','带字幕预览','正式成片交付']
 STEPS_EN = ['Story intake','Writing pack and draft','Couple script approval','Voice auditions','Full narration',
-            'Storyboard','Three pilot images','Remaining images','Image-to-video','Music style auditions',
+            'Storyboard','Character sheets and pilot images','Remaining images','Image-to-video','Music style auditions',
             'Voice and music excerpts','Full audio mix','Subtitled preview','Final delivery']
 STATE='PROJECT_STATE.json'
 
@@ -76,6 +76,7 @@ def required(n): return {'couple'} if n==3 else {'producer','couple'} if n==14 e
 def check_artifacts(project,record):
     if not record['artifacts']: raise ValueError('当前步骤尚未登记实际交付文件')
     for a in record['artifacts']:
+        if a.get('purged_at'): continue  # 交付后按合规要求删除的真人原图，指纹留存在历史里
         p=inside(project,a['path'])
         if sha(p)!=a['sha256']: raise ValueError('文件版本已变化，先 reopen 并重新确认：'+a['path'])
 
@@ -149,8 +150,7 @@ def summary(project):
     return f'【{n}/14｜{STEPS[n-1]}｜{status}｜后续还剩 {14-n} 步】'
 
 def route(kind,configured=False):
-    if kind in ('image','image-edit','character-image'): return 'external-gpt-manual'
-    if kind not in ('writing','voice','video','music','editing'): raise ValueError('未知环节')
+    if kind not in ('image','image-edit','character-image','writing','voice','video','music','editing'): raise ValueError('未知环节')
     return 'api-if-authorized' if configured else 'guided-manual-or-configure'
 
 def zip_new(project,out,entries):
@@ -198,7 +198,7 @@ def video_pack(project,manifest,out):
     if not ids or len(set(ids))!=len(ids) or set(ids)!=set(expected) or len(set(expected))!=len(expected):
         raise ValueError('镜号重复、缺失或与确认计划不一致')
     approved={a['sha256'] for n in ('7','8') for a in s['steps'][n]['artifacts']}
-    entries={'00-使用说明.txt':'每镜一个文件夹。上传本镜首帧图片，复制视频提示词，按提示词设置时长和画幅。确认模型入口能固定首帧；普通参考槽不一定等价。生成后完整自查，再按镜号发回当前对话。此包不授权自动生图。\n'.encode()}
+    entries={'00-使用说明.txt':'每镜一个文件夹。上传本镜首帧图片，复制视频提示词，按提示词设置时长和画幅。确认模型入口能固定首帧；普通参考槽不一定等价。生成后完整自查，再按镜号发回当前对话。此包是手动备用路径；已授权时用 ark.py i2v-batch 直接生成。\n'.encode()}
     en=language(s)=='en'
     if en:entries={'00-README.txt':('Each shot has its own folder. Upload its first-frame image to your video model, paste video-prompt.txt, and set the requested duration and aspect ratio. Verify that the input fixes the first frame; a generic reference slot may not. Watch the whole result, then return the video with its shot ID to the current conversation. This package does not authorize automated image generation.\n').encode()}
     for shot in shots:

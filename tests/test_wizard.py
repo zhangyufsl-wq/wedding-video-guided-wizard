@@ -121,9 +121,9 @@ class WizardTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.w.video_pack(self.p,manifest,'invalid.zip')
             self.assertFalse((self.p/'invalid.zip').exists())
 
-    def test_image_route_never_uses_api(self):
-        self.assertEqual(self.w.route('image',True),'external-gpt-manual')
-        self.assertEqual(self.w.route('image-edit',True),'external-gpt-manual')
+    def test_image_route_needs_configuration(self):
+        self.assertEqual(self.w.route('image',True),'api-if-authorized')
+        self.assertEqual(self.w.route('character-image',False),'guided-manual-or-configure')
         self.assertEqual(self.w.route('voice',True),'api-if-authorized')
 
 if __name__ == '__main__': unittest.main()

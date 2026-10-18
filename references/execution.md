@@ -98,3 +98,22 @@ EDIT_PLAN.json 是可修改的剪辑工程，和原素材一起保留；调用�
 助手从真实音频与选定视频生成时间表；必须引用第 6 步确认的分镜表，每个已确认镜号按顺序出现一次，删镜或改顺序先重新确认分镜；字幕正文来自确认文案，断句、称呼和同步人工复核。切点对齐帧率；最后一个切点按最近帧取整，允许半帧内差异，完整音轨保持原长；镜头总长匹配实际主音轨，含留白；源区间不能超过素材。支持直切、适度变速、等比留边、字幕烧录，避免为炫技使用复杂转场。其他效果可使用宿主现有剪辑能力，但仍遵守批准版本和验收。
 
 assemble 仅允许第 13/14 步，检查第 9 步视频及第 12 步音轨指纹，输出 MP4、同名 SRT 和技术 QC。它不会自动批准预览或交付。英文字幕将 `subtitle_language` 设为 `en`，会按完整单词和实际宽度换行，并可用英文字体；中文仍为每行最多 18 字符。字幕可能因过长被拒绝，应按语义拆段，不缩成难读小字。最终交付附上实际 EDIT_PLAN.json、素材映射和使用说明。
+
+## 国内模型：火山方舟（ark.py）
+
+变量：`ARK_API_KEY`（必需），可选 `ARK_IMAGE_MODEL`（默认 doubao-seedream-4-5-251128）、`ARK_VIDEO_MODEL`（默认 doubao-seedance-1-5-pro-251215）、`ARK_WATERMARK`（默认 false）。模型 ID 以方舟控制台已开通的为准；上线前核实备案与商用条款。`media.py doctor` 显示是否已配置。
+
+```bash
+python3 scripts/ark.py character PROJECT --name 新娘 --photos photos/bride-1.jpg --style STYLE.md --out characters/bride-v1.png --authorized   # 第7步
+python3 scripts/ark.py keyframe PROJECT --shot S01 --prompt prompts/S01-image.txt --refs bride groom --out images/S01-v1.png --authorized   # 第7/8步
+python3 scripts/ark.py i2v-batch PROJECT --manifest VIDEO_PACK.json --version v1 --max-shots 3 --authorized   # 第9步
+python3 scripts/ark.py fetch PROJECT --task cgt-xxxx --out videos/S03-v1.mp4   # 超时续取，不重新提交
+python3 scripts/ark.py purge PROJECT --dir photos --confirm   # 新人验收后删除真人原图
+```
+
+- 每个输出旁有 `.gen.json`：模型、提示词、参考图指纹、任务号。登记文件时一并登记。
+- 参考图以 base64 内联提交，单张不超过 10MB；首帧以 `role: first_frame` 提交。若账号接口要求公网 URL，先改为上传到对象存储再传地址。
+- `VIDEO_PACK.json` 每镜可写 `"duration": 6` 覆盖默认时长（2–12 秒）。
+- `i2v-batch` 跳过已存在的同版本输出，失败即停，绝不连续付费重试。
+- `purge` 只在第 14 步新人验收后可用，删除后在状态里标记 `purged_at` 并把指纹写进历史，`validate` 仍可通过。
+- 《人工智能生成合成内容标识办法》要求显式标识：成片片尾或字幕加「AI生成」，发布内容号时同样标注。

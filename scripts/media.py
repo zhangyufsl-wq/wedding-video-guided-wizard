@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit, stage-bound text/TTS calls and local audio/video editing. No image generation."""
+"""Explicit, stage-bound text/TTS calls and local audio/video editing. Image/video generation lives in ark.py."""
 import argparse
 import base64
 import importlib.util
@@ -47,7 +47,7 @@ def doctor():
      'pillow':importlib.util.find_spec('PIL') is not None,'chinese_font':font_path(),'english_font':font_path('en'),
      'kimi_configured':bool(os.environ.get('MOONSHOT_API_KEY')),
      'doubao_configured':bool(os.environ.get('DOUBAO_API_KEY') or (os.environ.get('DOUBAO_APP_ID') and os.environ.get('DOUBAO_ACCESS_KEY'))),
-     'image_route':'external-gpt-manual-only','note':'配置存在不代表账号权限、余额或已授权付费调用'}
+     'ark_configured':bool(os.environ.get('ARK_API_KEY')),'image_video_route':'ark.py（Seedream/Seedance）或手动包','note':'配置存在不代表账号权限、余额或已授权付费调用'}
 
 def stage(project,allowed):
     s=w.validate(project)

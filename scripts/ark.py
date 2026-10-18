@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""国内模型适配：火山方舟 Seedream（角色定妆、分镜首帧）与 Seedance（首帧生视频），以及交付后清理真人原图。
+
+每个付费调用都绑定当前步骤与已确认版本，需要 --authorized；失败不自动重试，超时保留任务号供 fetch 续取。
+"""
+import argparse
+import base64
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+
+_here=Path(__file__).resolve().parent
+def _load(name,file):
+    spec=importlib.util.spec_from_file_location(name,_here/file)
+    mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod);return mod
+m=_load('wedding_media','media.py');w=m.w
+
+ARK_BASES=('https://ark.cn-beijing.volces.com/api/v3',)
+DEFAULT_IMAGE_MODEL='doubao-seedream-4-5-251128'
+DEFAULT_VIDEO_MODEL='doubao-seedance-1-5-pro-251215'
+PLACEHOLDER=re.compile(r'\{\{[^}]+\}\}|\[待填\]|TODO')
+SAFE_ID=re.compile(r'[A-Za-z0-9_-]{1,48}')
+# Seedream 要求总像素在约 3.69M–16.78M 之间。
+SIZES={'16:9':'2560x1440','9:16':'1440x2560','1:1':'2048x2048','4:3':'2304x1728','3:4':'1728x2304'}
+MIME={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'}
+
+def config():
+    key=os.environ.get('ARK_API_KEY')
+    if not key:raise ValueError('未配置 ARK_API_KEY；在本机环境变量里设置，不要贴到对话或仓库')
+    base=os.environ.get('ARK_BASE_URL',ARK_BASES[0]).rstrip('/')
+    if base not in ARK_BASES:raise ValueError('内置适配仅支持火山方舟官方地址')
+    return key,base
+
+def text_file(project,path,what):
+    t=w.inside(project,path).read_text(encoding='utf-8').strip()
+    if not t or PLACEHOLDER.search(t):raise ValueError(what+'为空或仍有占位符')
+    return t
+
+def data_uri(path):
+    p=Path(path);mime=MIME.get(p.suffix.lower())
+    if not mime:raise ValueError('不支持的图片类型：'+p.name)
+    if p.stat().st_size>10*1024*1024:raise ValueError('参考图超过 10MB，先压缩：'+p.name)
+    return f'data:{mime};base64,'+base64.b64encode(p.read_bytes()).decode()
+
+def check_image(path):
+    try:from PIL import Image
+    except ImportError:raise ValueError('校验图片需要 Pillow：python3 -m pip install Pillow') from None
+    try:
+        with Image.open(path) as im:im.verify()
+        with Image.open(path) as im:im.load()
+    except Exception:raise ValueError('不是可解码图片：'+Path(path).name) from None
+
+def call(method,url,key,payload=None,timeout=180):
+    data=None if payload is None else json.dumps(payload,ensure_ascii=False).encode()
+    req=urllib.request.Request(url,data=data,method=method,headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+    try:
+        with urllib.request.build_opener(m.NoRedirect).open(req,timeout=timeout) as r:return json.load(r)
+    except urllib.error.HTTPError as e:
+        try:detail=json.load(e).get('error',{})
+        except Exception:detail={}
+        msg=detail.get('code') or detail.get('message') or ''
+        raise ValueError(f'方舟接口返回 HTTP {e.code} {msg}'.strip()+'；先查原因，勿自动重复付费请求') from None
+    except ValueError:raise
+    except Exception:
+        raise ValueError('方舟请求未取得可验证结果；先到控制台查任务状态，勿自动重复付费请求') from None
+
+def download(url,dest):
+    if not str(url).startswith('https://'):raise ValueError('生成结果地址不是 https')
+    # 结果是预签名地址：不携带方舟密钥。
+    with urllib.request.urlopen(urllib.request.Request(url),timeout=300) as r,Path(dest).open('xb') as f:
+        size=0
+        for chunk in iter(lambda:r.read(1024*1024),b''):f.write(chunk);size+=len(chunk)
+    if not size:Path(dest).unlink();raise ValueError('下载结果为空')
+    return dest
+
+def rel(project,p):return Path(p).resolve().relative_to(Path(project).resolve()).as_posix()
+
+def sidecar(project,dest,record):
+    m.write_new(Path(dest).with_suffix('.gen.json'),json.dumps({**record,'output':rel(project,dest),'output_sha256':w.sha(dest),'created_at':w.now(),
+        'note':'接口成功不代表像本人或满意；仍需制作方看图确认'},ensure_ascii=False,indent=2))
+
+def seedream(project,prompt,images,size,dest,seed=None):
+    key,base=config()
+    payload={'model':os.environ.get('ARK_IMAGE_MODEL',DEFAULT_IMAGE_MODEL),'prompt':prompt,'size':size,
+             'sequential_image_generation':'disabled','response_format':'url',
+             'watermark':os.environ.get('ARK_WATERMARK','false').lower()=='true'}
+    if images:payload['image']=[data_uri(x) for x in images] if len(images)>1 else data_uri(images[0])
+    if seed is not None:payload['seed']=seed
+    data=call('POST',base+'/images/generations',key,payload)
+    items=data.get('data') or []
+    if not items or not items[0].get('url'):raise ValueError('未返回图片结果')
+    download(items[0]['url'],dest);check_image(dest)
+    return payload['model']
+
+# ---------- 第7步：角色定妆 ----------
+def character(project,name,photos,style,out,authorized,seed=None):
+    m.stage(project,{7})
+    if not authorized:raise ValueError('需当前任务明确授权生图 API 调用')
+    if not name.strip() or not photos:raise ValueError('需要角色名和至少一张本人照片')
+    dest=m.new_outputs(project,out,['.gen.json'])
+    style_text=text_file(project,style,'画风锚点')
+    refs=[w.inside(project,x) for x in photos]
+    for r in refs:check_image(r)
+    prompt=(f'{style_text}\n\n任务：根据参考照片，为「{name}」生成一张Q版角色设定图。同一画面包含正面、四分之三侧面、全身三个视角，'
+            '浅色纯色背景，不加任何文字或标注。保留照片里的发型发色、脸型特征、眼镜等标志物和常穿服饰；不要美化到认不出，'
+            f'不改变年龄阶段和性别表现。所有参考图都是同一个人：{name}。')
+    model=seedream(project,prompt,refs,'2048x2048',dest,seed)
+    sidecar(project,dest,{'kind':'character-sheet','name':name,'model':model,'seed':seed,'prompt':prompt,
+        'style':rel(project,w.inside(project,style)),'sources':[{'path':rel(project,r),'sha256':w.sha(r)} for r in refs]})
+    return dest
+
+def load_characters(project,state,path):
+    p=w.inside(project,path);data=json.loads(p.read_text(encoding='utf-8'))
+    chars={str(c['id']):c for c in data.get('characters',[])}
+    if not chars or not data.get('style'):raise ValueError('CHARACTERS.json 需要 style 与 characters')
+    if state['current_step']==8:
+        approved=m.hashes(state,7)
+        if w.sha(p) not in approved:raise ValueError('角色表不是第7步确认版本')
+        for c in chars.values():
+            if w.sha(w.inside(project,c['sheet'])) not in approved:raise ValueError('角色设定图不是第7步确认版本：'+c['id'])
+    return data,chars
+
+# ---------- 第7/8步：分镜首帧 ----------
+def keyframe(project,shot,prompt_path,characters,refs,out,ratio,authorized,seed=None):
+    state=m.stage(project,{7,8})
+    if not authorized:raise ValueError('需当前任务明确授权生图 API 调用')
+    if not SAFE_ID.fullmatch(shot):raise ValueError('不安全的镜号')
+    if ratio not in SIZES:raise ValueError('画幅仅支持 '+'、'.join(SIZES))
+    data,chars=load_characters(project,state,characters)
+    dest=m.new_outputs(project,out,['.gen.json'])
+    unknown=[r for r in refs if r not in chars]
+    if unknown:raise ValueError('角色表里没有：'+','.join(unknown))
+    sheets=[w.inside(project,chars[r]['sheet']) for r in refs]
+    for s in sheets:check_image(s)
+    mapping='\n'.join(f'第{i}张参考图是「{chars[r]["name"]}」的Q版角色设定图，只用来保持此人外形、发型和服饰；画面里不要出现三视图排版。'
+                      for i,r in enumerate(refs,1))
+    prompt='\n\n'.join(x for x in [text_file(project,data['style'],'画风锚点'),mapping,
+        text_file(project,prompt_path,'本镜生图提示词'),f'画幅 {ratio}，单一画面，不加文字。'] if x)
+    model=seedream(project,prompt,sheets,SIZES[ratio],dest,seed)
+    sidecar(project,dest,{'kind':'keyframe','shot':shot,'model':model,'seed':seed,'ratio':ratio,'prompt':prompt,
+        'characters':rel(project,w.inside(project,characters)),'references':[{'id':r,'sha256':w.sha(s)} for r,s in zip(refs,sheets)]})
+    return dest
+
+# ---------- 第9步：首帧生视频 ----------
+def video_shots(project,state,manifest):
+    data=json.loads(w.inside(project,manifest).read_text(encoding='utf-8'))
+    plan_path=w.inside(project,data['plan'])
+    if w.sha(plan_path) not in m.hashes(state,6):raise ValueError('镜头计划不是第6步确认版本')
+    expected=[str(x['id']) for x in json.loads(plan_path.read_text(encoding='utf-8'))['shots']]
+    shots={str(s['id']):s for s in data['shots']}
+    if not expected or len(set(expected))!=len(expected) or set(shots)!=set(expected) or len(shots)!=len(data['shots']):
+        raise ValueError('镜号重复、缺失或与确认计划不一致')
+    approved=m.hashes(state,7)|m.hashes(state,8);out=[]
+    for ident in expected:
+        if not SAFE_ID.fullmatch(ident):raise ValueError('不安全的镜号')
+        pic=w.inside(project,shots[ident]['image'])
+        if w.sha(pic) not in approved:raise ValueError('首帧不是已确认的第7/8步图片：'+ident)
+        check_image(pic)
+        out.append((ident,pic,text_file(project,shots[ident]['prompt'],'视频提示词 '+ident),shots[ident]))
+    return out
+
+def poll(project,task,dest,key,base,interval,timeout,record):
+    deadline=time.monotonic()+timeout
+    while True:
+        info=call('GET',f'{base}/contents/generations/tasks/{task}',key)
+        status=info.get('status')
+        if status=='succeeded':
+            url=(info.get('content') or {}).get('video_url')
+            if not url:raise ValueError('任务成功但未返回视频地址：'+task)
+            download(url,dest)
+            try:length=m.duration(dest)
+            except ValueError:length=None
+            sidecar(project,dest,{**record,'task_id':task,'decoded_seconds':length,'usage':info.get('usage')})
+            return dest
+        if status in ('failed','cancelled','expired'):
+            err=(info.get('error') or {}).get('code') or status
+            raise ValueError(f'视频任务 {task} 未成功：{err}；先看原因再决定是否重做')
+        if time.monotonic()>deadline:
+            m.write_new(Path(dest).with_suffix('.pending.json'),json.dumps({**record,'task_id':task,'status':status,'at':w.now()},ensure_ascii=False,indent=2))
+            raise ValueError(f'视频任务 {task} 仍在 {status}；已记录 .pending.json，稍后用 fetch 续取，不要重新提交')
+        time.sleep(interval)
+
+def i2v(project,manifest,shot,out,duration,ratio,resolution,authorized,interval=10,timeout=900,state=None):
+    state=state or m.stage(project,{9})
+    if not authorized:raise ValueError('需当前任务明确授权视频 API 调用')
+    if not 2<=duration<=12:raise ValueError('单镜时长需在 2–12 秒')
+    items={x[0]:x for x in video_shots(project,state,manifest)}
+    if shot not in items:raise ValueError('确认分镜中没有镜号：'+shot)
+    ident,pic,prompt,_=items[shot]
+    dest=m.new_outputs(project,out,['.gen.json','.pending.json'])
+    key,base=config();model=os.environ.get('ARK_VIDEO_MODEL',DEFAULT_VIDEO_MODEL)
+    flags=f' --duration {duration} --ratio {ratio} --resolution {resolution} --watermark false'
+    payload={'model':model,'content':[{'type':'text','text':prompt+flags},
+             {'type':'image_url','image_url':{'url':data_uri(pic)},'role':'first_frame'}]}
+    task=call('POST',base+'/contents/generations/tasks',key,payload).get('id')
+    if not task:raise ValueError('未返回任务号')
+    record={'kind':'image-to-video','shot':ident,'model':model,'first_frame':rel(project,pic),'first_frame_sha256':w.sha(pic),
+            'prompt_sha256':w.sha(w.inside(project,items[shot][3]['prompt'])),'duration':duration,'ratio':ratio,'resolution':resolution}
+    return poll(project,task,dest,key,base,interval,timeout,record)
+
+def fetch(project,task,out,interval=10,timeout=900):
+    m.stage(project,{9})
+    if not re.fullmatch(r'[A-Za-z0-9_-]{4,80}',task):raise ValueError('任务号格式不对')
+    pending=w.inside(project,Path(out).with_suffix('.pending.json'))
+    record=json.loads(pending.read_text(encoding='utf-8'))
+    if record.get('task_id')!=task:raise ValueError('任务号与 .pending.json 不一致')
+    dest=m.new_outputs(project,out,['.gen.json'])
+    key,base=config()
+    return poll(project,task,dest,key,base,interval,timeout,{k:v for k,v in record.items() if k not in ('task_id','status','at')})
+
+def i2v_batch(project,manifest,outdir,version,max_shots,duration,ratio,resolution,authorized,interval=10,timeout=900):
+    state=m.stage(project,{9})
+    if not authorized:raise ValueError('需当前任务明确授权视频 API 调用')
+    if not re.fullmatch(r'v[0-9]{1,3}',version):raise ValueError('版本名用 v1、v2 这种格式')
+    if max_shots<1:raise ValueError('--max-shots 必须为正整数：明确本次最多付费生成几镜')
+    shots=video_shots(project,state,manifest);done=[];skipped=[]
+    for ident,_,_,spec in shots:
+        out=Path(outdir)/f'{ident}-{version}.mp4'
+        if w.inside(project,out,False).exists() or w.inside(project,out.with_suffix('.pending.json'),False).exists():
+            skipped.append(ident);continue
+        if len(done)>=max_shots:break
+        # 失败即停：不连续付费重试，也不跳过继续烧钱。
+        i2v(project,manifest,ident,out,int(spec.get('duration',duration)),ratio,resolution,True,interval,timeout,state)
+        done.append(ident)
+    remaining=[x[0] for x in shots if x[0] not in done and x[0] not in skipped]
+    return {'generated':done,'skipped_existing':skipped,'remaining':remaining}
+
+# ---------- 交付后：删除真人原图 ----------
+def purge(project,directory,confirm):
+    s=w.validate(project)
+    if not s['completed']:raise ValueError('新人验收完成后才能清理原图')
+    if not confirm:raise ValueError('删除不可恢复：确认要删时加 --confirm')
+    root=Path(project).resolve();folder=w.inside(project,directory,False)
+    if not folder.is_dir() or folder==root:raise ValueError('需要项目内的原图文件夹')
+    files=[p for p in folder.rglob('*') if p.is_file() and not p.is_symlink()]
+    if not files:raise ValueError('文件夹里没有可清理的文件')
+    log=[]
+    for p in files:
+        r=rel(project,p);digest=w.sha(p)
+        for step in s['steps'].values():
+            for a in step['artifacts']:
+                if a['path']==r and a['sha256']==digest:a['purged_at']=w.now()
+        p.unlink();log.append({'path':r,'sha256':digest})
+    s['history'].append({'at':w.now(),'action':'purge-sources','files':log})
+    w.save(project,s)
+    return log
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='cmd',required=True)
+    q=sub.add_parser('character');q.add_argument('project',type=Path);q.add_argument('--name',required=True)
+    q.add_argument('--photos',nargs='+',required=True);q.add_argument('--style',required=True);q.add_argument('--out',required=True)
+    q.add_argument('--seed',type=int);q.add_argument('--authorized',action='store_true')
+    q=sub.add_parser('keyframe');q.add_argument('project',type=Path);q.add_argument('--shot',required=True)
+    q.add_argument('--prompt',required=True);q.add_argument('--characters',default='CHARACTERS.json');q.add_argument('--refs',nargs='+',required=True)
+    q.add_argument('--out',required=True);q.add_argument('--ratio',default='16:9');q.add_argument('--seed',type=int);q.add_argument('--authorized',action='store_true')
+    for name in ('i2v','i2v-batch'):
+        q=sub.add_parser(name);q.add_argument('project',type=Path);q.add_argument('--manifest',default='VIDEO_PACK.json')
+        q.add_argument('--duration',type=int,default=5);q.add_argument('--ratio',default='adaptive');q.add_argument('--resolution',default='720p')
+        q.add_argument('--timeout',type=int,default=900);q.add_argument('--authorized',action='store_true')
+        if name=='i2v':q.add_argument('--shot',required=True);q.add_argument('--out',required=True)
+        else:q.add_argument('--outdir',default='videos');q.add_argument('--version',default='v1');q.add_argument('--max-shots',type=int,required=True)
+    q=sub.add_parser('fetch');q.add_argument('project',type=Path);q.add_argument('--task',required=True);q.add_argument('--out',required=True)
+    q=sub.add_parser('purge');q.add_argument('project',type=Path);q.add_argument('--dir',required=True);q.add_argument('--confirm',action='store_true')
+    a=p.parse_args()
+    if a.cmd=='character':r=character(a.project,a.name,a.photos,a.style,a.out,a.authorized,a.seed)
+    elif a.cmd=='keyframe':r=keyframe(a.project,a.shot,a.prompt,a.characters,a.refs,a.out,a.ratio,a.authorized,a.seed)
+    elif a.cmd=='i2v':r=i2v(a.project,a.manifest,a.shot,a.out,a.duration,a.ratio,a.resolution,a.authorized,timeout=a.timeout)
+    elif a.cmd=='i2v-batch':r=json.dumps(i2v_batch(a.project,a.manifest,a.outdir,a.version,a.max_shots,a.duration,a.ratio,a.resolution,a.authorized,timeout=a.timeout),ensure_ascii=False)
+    elif a.cmd=='fetch':r=fetch(a.project,a.task,a.out)
+    else:r=json.dumps(purge(a.project,a.dir,a.confirm),ensure_ascii=False,indent=2)
+    print(r)
+
+if __name__=='__main__':
+    try:main()
+    except (ValueError,OSError,KeyError,TypeError) as e:print('未完成：'+str(e),file=sys.stderr);sys.exit(2)
