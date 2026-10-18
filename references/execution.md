@@ -117,3 +117,11 @@ python3 scripts/ark.py purge PROJECT --dir photos --confirm   # 新人验收后�
 - `i2v-batch` 跳过已存在的同版本输出，失败即停，绝不连续付费重试。
 - `purge` 只在第 14 步新人验收后可用，删除后在状态里标记 `purged_at` 并把指纹写进历史，`validate` 仍可通过。
 - 《人工智能生成合成内容标识办法》要求显式标识：成片片尾或字幕加「AI生成」，发布内容号时同样标注。
+
+### 一致性试跑（不建订单）
+
+```bash
+python3 scripts/ark.py trial D:/试跑/run1 --person "阿杰=D:/照片/jie1.jpg,D:/照片/jie2.jpg" --person "小雨=D:/照片/yu1.jpg" --style assets/style-qban.md --scenes assets/trial-scenes.md --authorized
+```
+
+先出每人一张设定图，再按 `assets/trial-scenes.md` 出最多 12 张分镜，最后拼一张 `总览.jpg` 方便一眼看一致性。加 `--videos 1` 再把第一张做成 5 秒视频（最多 3 条）。输出文件夹必须是新的；试跑照片用完自行删除。

@@ -251,6 +251,63 @@ def purge(project,directory,confirm):
     w.save(project,s)
     return log
 
+# ---------- 试跑：不走订单流程，只测角色一致性 ----------
+def contact_sheet(images,dest,cols=4,cell=360):
+    from PIL import Image
+    rows=(len(images)+cols-1)//cols;sheet=Image.new('RGB',(cols*cell,rows*cell),(250,248,244))
+    for i,path in enumerate(images):
+        with Image.open(path) as im:
+            im=im.convert('RGB');im.thumbnail((cell-12,cell-12))
+            sheet.paste(im,((i%cols)*cell+(cell-im.width)//2,(i//cols)*cell+(cell-im.height)//2))
+    sheet.save(dest,quality=90);return dest
+
+def trial(outdir,people,style,scenes,videos,ratio,authorized):
+    if not authorized:raise ValueError('试跑会产生生图/视频费用，需加 --authorized')
+    out=Path(outdir).resolve()
+    if out.exists():raise ValueError('输出文件夹已存在，换一个新名字：'+out.name)
+    style_text=Path(style).read_text(encoding='utf-8').strip()
+    lines=[x.strip().lstrip('-0123456789.、 ').strip() for x in Path(scenes).read_text(encoding='utf-8').splitlines()]
+    lines=[x for x in lines if x and not x.startswith('#')][:12]
+    if not style_text or not lines:raise ValueError('画风文件或场景清单为空')
+    if ratio not in SIZES:raise ValueError('画幅仅支持 '+'、'.join(SIZES))
+    if not 0<=videos<=len(lines) or videos>3:raise ValueError('--videos 取 0–3，先少量试')
+    parsed=[]
+    for item in people:
+        name,_,files=item.partition('=')
+        photos=[Path(x).resolve() for x in files.split(',') if x]
+        if not name.strip() or not photos:raise ValueError('--person 格式：名字=照片1,照片2')
+        for ph in photos:check_image(ph)
+        parsed.append((name.strip(),photos))
+    out.mkdir(parents=True);(out/'characters').mkdir();(out/'shots').mkdir()
+    sheets=[]
+    for i,(name,photos) in enumerate(parsed,1):
+        dest=out/'characters'/f'P{i}.png'
+        prompt=(f'{style_text}\n\n任务：根据参考照片，为「{name}」生成一张Q版角色设定图。同一画面包含正面、四分之三侧面、全身三个视角，'
+                '浅色纯色背景，不加任何文字。保留照片里的发型发色、脸型特征、眼镜等标志物和常穿服饰；不要美化到认不出，'
+                f'不改变年龄阶段和性别表现。所有参考图都是同一个人：{name}。')
+        model=seedream(out,prompt,photos,'2048x2048',dest)
+        sidecar(out,dest,{'kind':'trial-character','name':name,'model':model,'prompt':prompt})
+        sheets.append((name,dest));print('角色设定图：',dest,flush=True)
+    mapping='\n'.join(f'第{i}张参考图是「{n}」的Q版角色设定图，只用来保持此人外形、发型和服饰；画面里不要出现三视图排版。' for i,(n,_) in enumerate(sheets,1))
+    shots=[]
+    for i,scene in enumerate(lines,1):
+        dest=out/'shots'/f'S{i:02}.png'
+        prompt=f'{style_text}\n\n{mapping}\n\n{scene}\n\n画幅 {ratio}，单一画面，不加文字。'
+        model=seedream(out,prompt,[s for _,s in sheets],SIZES[ratio],dest)
+        sidecar(out,dest,{'kind':'trial-keyframe','scene':scene,'model':model,'prompt':prompt})
+        shots.append(dest);print(f'分镜 {i}/{len(lines)}：',dest,flush=True)
+    contact_sheet([s for _,s in sheets]+shots,out/'总览.jpg')
+    if videos:
+        key,base=config();model=os.environ.get('ARK_VIDEO_MODEL',DEFAULT_VIDEO_MODEL);(out/'videos').mkdir()
+        for i,pic in enumerate(shots[:videos],1):
+            payload={'model':model,'content':[{'type':'text','text':lines[i-1]+'。动作自然连贯，一个主要动作，镜头缓慢推近 --duration 5 --ratio adaptive --resolution 720p --watermark false'},
+                     {'type':'image_url','image_url':{'url':data_uri(pic)},'role':'first_frame'}]}
+            task=call('POST',base+'/contents/generations/tasks',key,payload).get('id')
+            if not task:raise ValueError('未返回任务号')
+            poll(out,task,out/'videos'/f'S{i:02}.mp4',key,base,10,900,{'kind':'trial-video','model':model,'first_frame':rel(out,pic)})
+            print(f'视频 {i}/{videos} 完成',flush=True)
+    return out/'总览.jpg'
+
 def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='cmd',required=True)
     q=sub.add_parser('character');q.add_argument('project',type=Path);q.add_argument('--name',required=True)
@@ -267,8 +324,12 @@ def main():
         else:q.add_argument('--outdir',default='videos');q.add_argument('--version',default='v1');q.add_argument('--max-shots',type=int,required=True)
     q=sub.add_parser('fetch');q.add_argument('project',type=Path);q.add_argument('--task',required=True);q.add_argument('--out',required=True)
     q=sub.add_parser('purge');q.add_argument('project',type=Path);q.add_argument('--dir',required=True);q.add_argument('--confirm',action='store_true')
+    q=sub.add_parser('trial',help='不走订单流程，只测角色一致性');q.add_argument('outdir')
+    q.add_argument('--person',action='append',required=True,help='名字=照片1,照片2，可重复');q.add_argument('--style',required=True)
+    q.add_argument('--scenes',required=True);q.add_argument('--videos',type=int,default=0);q.add_argument('--ratio',default='16:9');q.add_argument('--authorized',action='store_true')
     a=p.parse_args()
-    if a.cmd=='character':r=character(a.project,a.name,a.photos,a.style,a.out,a.authorized,a.seed)
+    if a.cmd=='trial':r=trial(a.outdir,a.person,a.style,a.scenes,a.videos,a.ratio,a.authorized)
+    elif a.cmd=='character':r=character(a.project,a.name,a.photos,a.style,a.out,a.authorized,a.seed)
     elif a.cmd=='keyframe':r=keyframe(a.project,a.shot,a.prompt,a.characters,a.refs,a.out,a.ratio,a.authorized,a.seed)
     elif a.cmd=='i2v':r=i2v(a.project,a.manifest,a.shot,a.out,a.duration,a.ratio,a.resolution,a.authorized,timeout=a.timeout)
     elif a.cmd=='i2v-batch':r=json.dumps(i2v_batch(a.project,a.manifest,a.outdir,a.version,a.max_shots,a.duration,a.ratio,a.resolution,a.authorized,timeout=a.timeout),ensure_ascii=False)
