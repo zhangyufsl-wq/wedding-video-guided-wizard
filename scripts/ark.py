@@ -118,7 +118,7 @@ def character(project,name,photos,style,out,authorized,seed=None):
     refs=[w.inside(project,x) for x in photos]
     for r in refs:check_image(r)
     prompt=(f'{style_text}\n\n任务：根据参考照片，为「{name}」生成一张Q版角色设定图。同一画面包含正面、四分之三侧面、全身三个视角，'
-            '浅色纯色背景，不加任何文字或标注。保留照片里的发型发色、脸型特征、眼镜等标志物和常穿服饰；不要美化到认不出，'
+            '浅色纯色背景，不加任何文字或标注。严格按照片还原发型发色、脸型、五官特征和服饰；照片里没有的东西（如眼镜、帽子、饰品）一律不要添加；不要美化到认不出，'
             f'不改变年龄阶段和性别表现。所有参考图都是同一个人：{name}。')
     model=seedream(project,prompt,refs,'2048x2048',dest,seed)
     sidecar(project,dest,{'kind':'character-sheet','name':name,'model':model,'seed':seed,'prompt':prompt,
@@ -295,7 +295,7 @@ def trial(outdir,people,style,scenes,videos,ratio,authorized):
         if dest.exists():
             check_image(dest);sheets.append((name,dest));print('沿用已生成的角色设定图：',dest,flush=True);continue
         prompt=(f'{style_text}\n\n任务：根据参考照片，为「{name}」生成一张Q版角色设定图。同一画面包含正面、四分之三侧面、全身三个视角，'
-                '浅色纯色背景，不加任何文字。保留照片里的发型发色、脸型特征、眼镜等标志物和常穿服饰；不要美化到认不出，'
+                '浅色纯色背景，不加任何文字。严格按照片还原发型发色、脸型、五官特征和服饰；照片里没有的东西（如眼镜、帽子、饰品）一律不要添加；不要美化到认不出，'
                 f'不改变年龄阶段和性别表现。所有参考图都是同一个人：{name}。')
         model=seedream(out,prompt,photos,'2048x2048',dest)
         sidecar(out,dest,{'kind':'trial-character','name':name,'model':model,'prompt':prompt})
