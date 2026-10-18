@@ -22,8 +22,8 @@ def _load(name,file):
 m=_load('wedding_media','media.py');w=m.w
 
 ARK_BASES=('https://ark.cn-beijing.volces.com/api/v3',)
-DEFAULT_IMAGE_MODEL='doubao-seedream-4-5-251128'
-DEFAULT_VIDEO_MODEL='doubao-seedance-1-5-pro-251215'
+DEFAULT_IMAGE_MODEL='doubao-seedream-5-0-flash-260915'
+DEFAULT_VIDEO_MODEL='doubao-seedance-2-0-mini-260615'
 PLACEHOLDER=re.compile(r'\{\{[^}]+\}\}|\[待填\]|TODO')
 SAFE_ID=re.compile(r'[A-Za-z0-9_-]{1,48}')
 # Seedream 要求总像素在约 3.69M–16.78M 之间。

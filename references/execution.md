@@ -101,7 +101,7 @@ assemble 仅允许第 13/14 步，检查第 9 步视频及第 12 步音轨指纹
 
 ## 国内模型：火山方舟（ark.py）
 
-变量：`ARK_API_KEY`（必需），可选 `ARK_IMAGE_MODEL`（默认 doubao-seedream-4-5-251128）、`ARK_VIDEO_MODEL`（默认 doubao-seedance-1-5-pro-251215）、`ARK_WATERMARK`（默认 false）。模型 ID 以方舟控制台已开通的为准；上线前核实备案与商用条款。`media.py doctor` 显示是否已配置。
+变量：`ARK_API_KEY`（必需），可选 `ARK_IMAGE_MODEL`（默认 doubao-seedream-5-0-flash-260915）、`ARK_VIDEO_MODEL`（默认 doubao-seedance-2-0-mini-260615）、`ARK_WATERMARK`（默认 false）。模型 ID 以方舟控制台已开通的为准；上线前核实备案与商用条款。`media.py doctor` 显示是否已配置。
 
 ```bash
 python3 scripts/ark.py character PROJECT --name 新娘 --photos photos/bride-1.jpg --style STYLE.md --out characters/bride-v1.png --authorized   # 第7步
