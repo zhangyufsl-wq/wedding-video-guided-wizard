@@ -5,6 +5,7 @@ import base64
 import importlib.util
 import json
 import math
+import re
 import os
 from pathlib import Path
 import shutil
@@ -119,12 +120,22 @@ def decode_tts(events):
     if not ended or not data: raise ValueError('语音流不完整或为空；不标记生成完成')
     return data,metadata
 
-def tts(project,text_path,instructions,voice,rate,out,authorized,selection='VOICE_SELECTION.json'):
+ANNOTATION=re.compile(r'\([a-zA-Züv]+[1-5]\)|\[[^\[\]]{1,20}\]')
+
+def strip_annotations(text):
+    return re.sub(r'\s+','',ANNOTATION.sub('',text))
+
+def tts(project,text_path,instructions,voice,rate,out,authorized,selection='VOICE_SELECTION.json',vo_text=None):
     state=stage(project,{4,5}); dest=new_outputs(project,out,['.timing.json'])
     if state['current_step']==5:voice_selection(project,state,text_path,instructions,voice,rate,selection)
     if dest.suffix.lower()!='.mp3': raise ValueError('此适配输出 MP3，请使用 .mp3 文件名')
     if not authorized: raise ValueError('需当前任务明确授权豆包 API 调用')
     text=w.inside(project,text_path).read_text(encoding='utf-8').strip()
+    if vo_text:
+        # 配音副本只允许加读音标注 (lei3) 和演绎提示 [停顿]，去掉后必须与确认文案一字不差；字幕仍用原文案。
+        annotated=w.inside(project,vo_text).read_text(encoding='utf-8').strip()
+        if strip_annotations(annotated)!=strip_annotations(text):raise ValueError('配音副本去掉标注后与确认文案不一致，不能偷偷改词')
+        text=annotated
     context=w.inside(project,instructions).read_text(encoding='utf-8').strip()
     if not text or not context or not -50<=rate<=100: raise ValueError('正文、情绪指导或语速无效')
     headers={'X-Api-Resource-Id':os.environ.get('DOUBAO_RESOURCE_ID','seed-tts-2.0'),'X-Api-Request-Id':str(uuid.uuid4())}
@@ -283,7 +294,7 @@ def main():
         if name=='kimi':q.add_argument('--prompt',required=True)
         if name=='tts':
             q.add_argument('--text',required=True);q.add_argument('--instructions',required=True);q.add_argument('--voice',required=True);q.add_argument('--rate',type=int,default=0)
-            q.add_argument('--selection',default='VOICE_SELECTION.json')
+            q.add_argument('--selection',default='VOICE_SELECTION.json');q.add_argument('--vo-text',help='带读音/停顿标注的配音副本')
         if name in ('kimi','tts'):q.add_argument('--authorized',action='store_true')
         if name=='mix':
             q.add_argument('--voice',required=True);q.add_argument('--music',required=True);q.add_argument('--gain',type=float,default=.16);q.add_argument('--start',type=float,default=0);q.add_argument('--length',type=float)
@@ -292,7 +303,7 @@ def main():
     if a.cmd=='doctor':print(json.dumps(doctor(),ensure_ascii=False,indent=2))
     elif a.cmd=='probe':print(json.dumps(probe(a.file),ensure_ascii=False,indent=2))
     elif a.cmd=='kimi':print(kimi(a.project,a.prompt,a.out,a.authorized))
-    elif a.cmd=='tts':print(tts(a.project,a.text,a.instructions,a.voice,a.rate,a.out,a.authorized,a.selection))
+    elif a.cmd=='tts':print(tts(a.project,a.text,a.instructions,a.voice,a.rate,a.out,a.authorized,a.selection,a.vo_text))
     elif a.cmd=='mix':print(mix(a.project,a.voice,a.music,a.out,a.gain,a.start,a.length))
     else:print(assemble(a.project,a.plan,a.out))
 
