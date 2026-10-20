@@ -160,6 +160,31 @@ def tts(project,text_path,instructions,voice,rate,out,authorized,selection='VOIC
     # Do not claim perceptual quality from provider status.
     return dest
 
+def music(project,prompt_path,out,seconds,authorized):
+    """Seed-Audio 1.0 文字生成纯音乐（第10/11步）。同步接口，单次最长 120 秒。"""
+    stage(project,{10,11}); dest=new_outputs(project,out,['.music.json'])
+    if not authorized: raise ValueError('需当前任务明确授权音频生成调用')
+    if dest.suffix.lower() not in ('.mp3','.wav'): raise ValueError('输出用 .mp3 或 .wav')
+    if not 10<=seconds<=120: raise ValueError('时长需在 10–120 秒')
+    desc=w.inside(project,prompt_path).read_text(encoding='utf-8').strip()
+    if not desc: raise ValueError('音乐描述为空')
+    text=(f'生成一段约{seconds}秒的纯器乐背景音乐，完全没有人声、没有歌词、没有说话、没有哼唱，用作婚礼故事短片的配乐。'+desc)
+    headers={'X-Api-Request-Id':str(uuid.uuid4())}
+    if os.environ.get('DOUBAO_API_KEY'):headers['X-Api-Key']=os.environ['DOUBAO_API_KEY']
+    elif os.environ.get('DOUBAO_APP_ID') and os.environ.get('DOUBAO_ACCESS_KEY'):
+        headers.update({'X-Api-App-Id':os.environ['DOUBAO_APP_ID'],'X-Api-Access-Key':os.environ['DOUBAO_ACCESS_KEY']})
+    else: raise ValueError('豆包配置缺失')
+    fmt=dest.suffix.lower()[1:]
+    payload={'model':'seed-audio-1.0','text_prompt':text,'audio_config':{'format':fmt}}
+    with request('https://openspeech.bytedance.com/api/v3/tts/create',headers,payload) as r: data=json.load(r)
+    if data.get('code') not in (None,0,20000000): raise ValueError(f"音频生成返回错误 {data.get('code')} {data.get('message','')}")
+    if data.get('audio'): dest.write_bytes(base64.b64decode(data['audio']))
+    elif data.get('url'):
+        with urllib.request.urlopen(data['url'],timeout=120) as u: dest.write_bytes(u.read())
+    else: raise ValueError('未返回音频')
+    write_new(dest.with_suffix('.music.json'),json.dumps({'model':'seed-audio-1.0','prompt':text,'returned_duration':data.get('duration')},ensure_ascii=False,indent=2))
+    return dest
+
 def mix(project,voice,music,out,gain=.16,start=0,length=None):
     state=stage(project,{11,12}); dest=new_outputs(project,out,['.mix.json'])
     voice=w.inside(project,voice); music=w.inside(project,music)
@@ -295,6 +320,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='cmd',required=True)
     sub.add_parser('doctor')
     q=sub.add_parser('probe');q.add_argument('file')
+    q=sub.add_parser('music');q.add_argument('project',type=Path);q.add_argument('--prompt',required=True);q.add_argument('--out',required=True);q.add_argument('--seconds',type=int,default=90);q.add_argument('--authorized',action='store_true')
     for name in ('kimi','tts','mix','assemble'):
         q=sub.add_parser(name);q.add_argument('project',type=Path);q.add_argument('--out',required=True)
         if name=='kimi':q.add_argument('--prompt',required=True)
@@ -310,6 +336,7 @@ def main():
     elif a.cmd=='probe':print(json.dumps(probe(a.file),ensure_ascii=False,indent=2))
     elif a.cmd=='kimi':print(kimi(a.project,a.prompt,a.out,a.authorized))
     elif a.cmd=='tts':print(tts(a.project,a.text,a.instructions,a.voice,a.rate,a.out,a.authorized,a.selection,a.vo_text,a.swap))
+    elif a.cmd=='music':print(music(a.project,a.prompt,a.out,a.seconds,a.authorized))
     elif a.cmd=='mix':print(mix(a.project,a.voice,a.music,a.out,a.gain,a.start,a.length))
     else:print(assemble(a.project,a.plan,a.out))
 
