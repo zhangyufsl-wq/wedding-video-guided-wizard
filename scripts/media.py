@@ -88,8 +88,13 @@ def request(url,headers,payload):
     req=urllib.request.Request(url,data=data,headers={**headers,'Content-Type':'application/json'},method='POST')
     try: return urllib.request.build_opener(NoRedirect).open(req,timeout=180)
     except Exception as e:
-        code=getattr(e,'code',None)
-        raise ValueError('生成请求未取得可验证结果'+('，HTTP '+str(code) if code else '')+'；先查状态，勿自动重复付费请求') from None
+        code=getattr(e,'code',None);detail=''
+        try:
+            body=json.loads(e.read().decode('utf-8','replace'))
+            info=body.get('header',body) if isinstance(body,dict) else {}
+            detail=' '.join(str(info.get(k)) for k in ('code','message','status_code','status_message') if info.get(k))
+        except Exception:pass
+        raise ValueError('生成请求未取得可验证结果'+('，HTTP '+str(code) if code else '')+(' '+detail[:200] if detail else '')+'；先查状态，勿自动重复付费请求') from None
 
 def kimi(project,prompt,out,authorized):
     stage(project,{2}); dest=new_output(project,out)
