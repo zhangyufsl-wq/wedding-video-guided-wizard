@@ -109,7 +109,7 @@ def seedream(project,prompt,images,size,dest,seed=None):
     return payload['model']
 
 # ---------- 第7步：角色定妆 ----------
-def character(project,name,photos,style,out,authorized,seed=None):
+def character(project,name,photos,style,out,authorized,seed=None,outfit=None):
     m.stage(project,{7})
     if not authorized:raise ValueError('需当前任务明确授权生图 API 调用')
     if not name.strip() or not photos:raise ValueError('需要角色名和至少一张本人照片')
@@ -117,11 +117,12 @@ def character(project,name,photos,style,out,authorized,seed=None):
     style_text=text_file(project,style,'画风锚点')
     refs=[w.inside(project,x) for x in photos]
     for r in refs:check_image(r)
+    wear=f'服装统一画成：{outfit}（不要照搬照片里的礼服或婚纱）。' if outfit else '服饰按照片还原。'
     prompt=(f'{style_text}\n\n任务：根据参考照片，为「{name}」生成一张Q版角色设定图。同一画面包含正面、四分之三侧面、全身三个视角，'
-            '浅色纯色背景，不加任何文字或标注。严格按照片还原发型发色、脸型、五官特征和服饰；照片里没有的东西（如眼镜、帽子、饰品）一律不要添加；不要美化到认不出，'
-            f'不改变年龄阶段和性别表现。所有参考图都是同一个人：{name}。')
+            '浅色纯色背景，不加任何文字或标注。严格按照片还原发型发色、脸型、五官特征；照片里没有的东西（如眼镜、帽子、饰品）一律不要添加；不要美化到认不出，'
+            f'不改变年龄阶段和性别表现。{wear}所有参考图都是同一个人：{name}。')
     model=seedream(project,prompt,refs,'2048x2048',dest,seed)
-    sidecar(project,dest,{'kind':'character-sheet','name':name,'model':model,'seed':seed,'prompt':prompt,
+    sidecar(project,dest,{'kind':'character-sheet','name':name,'model':model,'seed':seed,'outfit':outfit,'prompt':prompt,
         'style':rel(project,w.inside(project,style)),'sources':[{'path':rel(project,r),'sha256':w.sha(r)} for r in refs]})
     return dest
 
@@ -148,7 +149,7 @@ def keyframe(project,shot,prompt_path,characters,refs,out,ratio,authorized,seed=
     if unknown:raise ValueError('角色表里没有：'+','.join(unknown))
     sheets=[w.inside(project,chars[r]['sheet']) for r in refs]
     for s in sheets:check_image(s)
-    mapping='\n'.join(f'第{i}张参考图是「{chars[r]["name"]}」的Q版角色设定图，只用来保持此人外形、发型和服饰；画面里不要出现三视图排版。'
+    mapping='\n'.join(f'第{i}张参考图是「{chars[r]["name"]}」的Q版角色设定图，只用来保持此人的脸型、五官、发色和Q版比例；服装和发型细节以本镜描述为准；画面里不要出现三视图排版。'
                       for i,r in enumerate(refs,1))
     prompt='\n\n'.join(x for x in [text_file(project,data['style'],'画风锚点'),mapping,
         text_file(project,prompt_path,'本镜生图提示词'),f'画幅 {ratio}，单一画面，不加文字。'] if x)
@@ -327,7 +328,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='cmd',required=True)
     q=sub.add_parser('character');q.add_argument('project',type=Path);q.add_argument('--name',required=True)
     q.add_argument('--photos',nargs='+',required=True);q.add_argument('--style',required=True);q.add_argument('--out',required=True)
-    q.add_argument('--seed',type=int);q.add_argument('--authorized',action='store_true')
+    q.add_argument('--seed',type=int);q.add_argument('--outfit',help='设定图统一服装，如：简单的白色T恤和牛仔裤');q.add_argument('--authorized',action='store_true')
     q=sub.add_parser('keyframe');q.add_argument('project',type=Path);q.add_argument('--shot',required=True)
     q.add_argument('--prompt',required=True);q.add_argument('--characters',default='CHARACTERS.json');q.add_argument('--refs',nargs='+',required=True)
     q.add_argument('--out',required=True);q.add_argument('--ratio',default='16:9');q.add_argument('--seed',type=int);q.add_argument('--authorized',action='store_true')
@@ -344,7 +345,7 @@ def main():
     q.add_argument('--scenes',required=True);q.add_argument('--videos',type=int,default=0);q.add_argument('--ratio',default='16:9');q.add_argument('--authorized',action='store_true')
     a=p.parse_args()
     if a.cmd=='trial':r=trial(a.outdir,a.person,a.style,a.scenes,a.videos,a.ratio,a.authorized)
-    elif a.cmd=='character':r=character(a.project,a.name,a.photos,a.style,a.out,a.authorized,a.seed)
+    elif a.cmd=='character':r=character(a.project,a.name,a.photos,a.style,a.out,a.authorized,a.seed,a.outfit)
     elif a.cmd=='keyframe':r=keyframe(a.project,a.shot,a.prompt,a.characters,a.refs,a.out,a.ratio,a.authorized,a.seed)
     elif a.cmd=='i2v':r=i2v(a.project,a.manifest,a.shot,a.out,a.duration,a.ratio,a.resolution,a.authorized,timeout=a.timeout)
     elif a.cmd=='i2v-batch':r=json.dumps(i2v_batch(a.project,a.manifest,a.outdir,a.version,a.max_shots,a.duration,a.ratio,a.resolution,a.authorized,timeout=a.timeout),ensure_ascii=False)
