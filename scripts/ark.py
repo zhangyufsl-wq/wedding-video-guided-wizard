@@ -315,7 +315,7 @@ def trial(outdir,people,style,scenes,videos,ratio,authorized):
             model=seedream(out,prompt,photos,'2048x2048',dest)
         sidecar(out,dest,{'kind':'trial-character','name':name,'model':model,'prompt':prompt})
         sheets.append((name,dest));print('角色设定图：',dest,flush=True)
-    mapping='\n'.join(f'第{i}张参考图是第{i}个人「{n}」的Q版角色设定图，只用来保持此人外形、发型和服饰；画面里不要出现三视图排版。' for i,(n,_) in enumerate(sheets,1))
+    mapping='\n'.join(f'第{i}张参考图是第{i}个人「{n}」的Q版角色设定图，只用来保持此人脸型、五官、发型发色和体型；服装以本镜描述为准，描述没写服装时才按设定图；画面里不要出现三视图排版。' for i,(n,_) in enumerate(sheets,1))
     shots=[]
     for i,scene in enumerate(lines,1):
         dest=out/'shots'/f'S{i:02}.png'
