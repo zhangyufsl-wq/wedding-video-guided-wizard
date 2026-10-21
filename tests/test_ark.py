@@ -102,6 +102,15 @@ class ArkTests(unittest.TestCase):
         pending=json.loads((self.p/'videos/S01-v1.pending.json').read_text(encoding='utf-8'))
         self.assertEqual(pending['task_id'],'cgt-slow')
 
+    def test_trial_text_only_character_sends_no_reference(self):
+        out=Path(self.tmp.name)/'trial';style=self.file('style.md','Q版画风');scenes=self.file('scenes.txt','第1个人在森林里奔跑')
+        sent=[]
+        def fake_call(method,url,key,payload=None):
+            sent.append(payload);return {'data':[{'url':'https://example.invalid/x.png'}]}
+        with patch.object(self.a,'call',fake_call),patch.object(self.a,'download',self.fake_download()):
+            self.a.trial(out,['星星=描述:5岁女孩，齐肩短发'],style,scenes,0,'16:9',True)
+        self.assertNotIn('image',sent[0]);self.assertIn('齐肩短发',sent[0]['prompt']);self.assertIn('image',sent[1])
+        self.assertTrue((out/'总览.jpg').exists())
     def test_purge_only_after_acceptance_and_keeps_state_valid(self):
         photo=png(self.p/'photos/bride.jpg')
         with self.assertRaises(ValueError):self.a.purge(self.p,'photos',True)

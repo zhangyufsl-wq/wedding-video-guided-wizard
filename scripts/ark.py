@@ -177,10 +177,13 @@ def video_shots(project,state,manifest):
     return out
 
 def poll(project,task,dest,key,base,interval,timeout,record):
-    deadline=time.monotonic()+timeout
+    start=time.monotonic();deadline=start+timeout;last=-60
     while True:
         info=call('GET',f'{base}/contents/generations/tasks/{task}',key)
         status=info.get('status')
+        waited=time.monotonic()-start
+        if status not in ('succeeded','failed','cancelled','expired') and waited-last>=60:
+            last=waited;print(f'  {Path(dest).name}：{status}，已等 {int(waited//60)} 分钟（正常要 3–8 分钟）',flush=True)
         if status=='succeeded':
             url=(info.get('content') or {}).get('video_url')
             if not url:raise ValueError('任务成功但未返回视频地址：'+task)
@@ -236,9 +239,10 @@ def i2v_batch(project,manifest,outdir,version,max_shots,duration,ratio,resolutio
         if w.inside(project,out,False).exists() or w.inside(project,out.with_suffix('.pending.json'),False).exists():
             skipped.append(ident);continue
         if len(done)>=max_shots:break
+        print(f'[{len(done)+len(skipped)+1}/{len(shots)}] 开始生成 {ident}…',flush=True)
         # 失败即停：不连续付费重试，也不跳过继续烧钱。
         i2v(project,manifest,ident,out,int(spec.get('duration',duration)),ratio,resolution,True,interval,timeout,state)
-        done.append(ident)
+        done.append(ident);print(f'[{len(done)+len(skipped)}/{len(shots)}] {ident} 完成',flush=True)
     remaining=[x[0] for x in shots if x[0] not in done and x[0] not in skipped]
     return {'generated':done,'skipped_existing':skipped,'remaining':remaining}
 
@@ -285,8 +289,13 @@ def trial(outdir,people,style,scenes,videos,ratio,authorized):
     parsed=[]
     for item in people:
         name,_,files=item.partition('=')
+        # 「名字=描述:文字」= 无照片的虚构角色，只用于定画风样片，不对应任何真人。
+        if files.startswith(('描述:','描述：')):
+            desc=files[3:].strip()
+            if not name.strip() or not desc:raise ValueError('--person 格式：名字=描述:外形文字')
+            parsed.append((name.strip(),desc));continue
         photos=[Path(x).resolve() for x in files.split(',') if x]
-        if not name.strip() or not photos:raise ValueError('--person 格式：名字=照片1,照片2')
+        if not name.strip() or not photos:raise ValueError('--person 格式：名字=照片1,照片2 或 名字=描述:外形文字')
         for ph in photos:check_image(ph)
         parsed.append((name.strip(),photos))
     for d in (out/'characters',out/'shots'):d.mkdir(parents=True,exist_ok=True)
@@ -295,10 +304,15 @@ def trial(outdir,people,style,scenes,videos,ratio,authorized):
         dest=out/'characters'/f'P{i}.png'
         if dest.exists():
             check_image(dest);sheets.append((name,dest));print('沿用已生成的角色设定图：',dest,flush=True);continue
-        prompt=(f'{style_text}\n\n任务：根据参考照片，为「{name}」生成一张Q版角色设定图。同一画面包含正面、四分之三侧面、全身三个视角，'
-                '浅色纯色背景，不加任何文字。严格按照片还原发型发色、脸型、五官特征和服饰；照片里没有的东西（如眼镜、帽子、饰品）一律不要添加；不要美化到认不出，'
-                f'不改变年龄阶段和性别表现。所有参考图都是同一个人：{name}。')
-        model=seedream(out,prompt,photos,'2048x2048',dest)
+        if isinstance(photos,str):
+            prompt=(f'{style_text}\n\n任务：为原创虚构角色「{name}」生成一张Q版角色设定图。同一画面包含正面、四分之三侧面、全身三个视角，'
+                    f'浅色纯色背景，不加任何文字。外形：{photos}。描述里没有的东西一律不要添加；原创设计，不要像任何已有动画或品牌角色。')
+            model=seedream(out,prompt,[],'2048x2048',dest)
+        else:
+            prompt=(f'{style_text}\n\n任务：根据参考照片，为「{name}」生成一张Q版角色设定图。同一画面包含正面、四分之三侧面、全身三个视角，'
+                    '浅色纯色背景，不加任何文字。严格按照片还原发型发色、脸型、五官特征和服饰；照片里没有的东西（如眼镜、帽子、饰品）一律不要添加；不要美化到认不出，'
+                    f'不改变年龄阶段和性别表现。所有参考图都是同一个人：{name}。')
+            model=seedream(out,prompt,photos,'2048x2048',dest)
         sidecar(out,dest,{'kind':'trial-character','name':name,'model':model,'prompt':prompt})
         sheets.append((name,dest));print('角色设定图：',dest,flush=True)
     mapping='\n'.join(f'第{i}张参考图是第{i}个人「{n}」的Q版角色设定图，只用来保持此人外形、发型和服饰；画面里不要出现三视图排版。' for i,(n,_) in enumerate(sheets,1))
@@ -341,7 +355,7 @@ def main():
     q=sub.add_parser('fetch');q.add_argument('project',type=Path);q.add_argument('--task',required=True);q.add_argument('--out',required=True)
     q=sub.add_parser('purge');q.add_argument('project',type=Path);q.add_argument('--dir',required=True);q.add_argument('--confirm',action='store_true')
     q=sub.add_parser('trial',help='不走订单流程，只测角色一致性');q.add_argument('outdir')
-    q.add_argument('--person',action='append',required=True,help='名字=照片1,照片2，可重复');q.add_argument('--style',required=True)
+    q.add_argument('--person',action='append',required=True,help='名字=照片1,照片2，或 名字=描述:外形文字（虚构角色），可重复');q.add_argument('--style',required=True)
     q.add_argument('--scenes',required=True);q.add_argument('--videos',type=int,default=0);q.add_argument('--ratio',default='16:9');q.add_argument('--authorized',action='store_true')
     a=p.parse_args()
     if a.cmd=='trial':r=trial(a.outdir,a.person,a.style,a.scenes,a.videos,a.ratio,a.authorized)
